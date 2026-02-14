@@ -3,6 +3,7 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts@5.0.2/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts@5.0.2/access/Ownable.sol";
 import "./LibString.sol";
 
@@ -18,23 +19,26 @@ interface IMachine {
 
 interface IRelics {
     function RELICS(uint _tokenId) external view returns (string memory kind, bytes memory data);
-    function relicIds(uint256) external view returns (uint256); // auto getter for public array
+    function relicIds(uint256) external view returns (uint256);
     function relicToPayload(uint _tokenId) external view returns (bytes memory);
     function relicToKind(uint _tokenId) external view returns (string memory);
     function isRelic(uint _tokenId) external view returns (bool);
 }
 
-contract THE_VESSEL is ERC721, Ownable {
+contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
 
     IRelics public relics;
-    uint public immutable MAX_SUPPLY = 10000;
     uint amountMachines = 1500;
     uint amountVault = 3650; //4850 3650 1500
     uint public lockStart;
     uint public claimedCount;
     bool public claimIsPaused;
     bool public creatorSupplyClaimed;
-    uint public blockPerDay = 8000;
+
+    uint public constant MAX_SUPPLY = 10000;
+    uint public constant BLOCKS_PER_DAY = 7200;
+    uint public constant PRICE_PER_UNIT = 0.00001 ether;
+    uint public constant LOCK_DIVISOR = 10;
 
     address creator1 = 0xCcf0a1307E5e5Ad04E85d94d7f9D400390F0118a;
     address creator2 = 0x28940210Fc7Af79B154265AeaD728541405A0ecD;
@@ -57,7 +61,7 @@ contract THE_VESSEL is ERC721, Ownable {
     mapping (uint => uint) public               craftToChosenIteration;
     mapping (uint => IMachine) public           craftToChosenMachine;
     IMachine public                             defaultMachine;
-    
+
     modifier  notClaimed (uint[] memory _tokenIds) {
         for (uint i = 0; i < _tokenIds.length; i++){
             require (!craftToClaimed[_tokenIds[i]], "Already claimed");
@@ -75,9 +79,13 @@ contract THE_VESSEL is ERC721, Ownable {
         require (claimIsActive(), "Claiming is not active");
         _;
     }
+
     event MetadataUpdate    (uint _tokenId);
-    event TokenClaimed      (uint _tokenId);
+    //event TokenClaimed      (uint _tokenId);
     event LockStarted       (uint _blocknum);
+    event PayloadSet        (uint _tokenId, uint _length);
+    event MachineSet        (uint _tokenId, address _machine);
+    event IterationSet      (uint _tokenId, uint _iteration);
 
     IExternalRenderer public renderer;
 
@@ -131,10 +139,6 @@ contract THE_VESSEL is ERC721, Ownable {
         }
     }
 
-    function setRole(role _r) public {
-        addressToRole[msg.sender] = _r;
-    }
-
 
     //========================================================//
     //======================= MINTING ========================//
@@ -145,7 +149,9 @@ contract THE_VESSEL is ERC721, Ownable {
         uint256[] memory _tokenIds,
         bytes memory _bytes,
         address _machine
-    ) public payable notClaimed(_tokenIds) whenActive {
+    ) public payable notClaimed(_tokenIds) whenActive 
+        //nonReentrant 
+        {
         uint256 n = _tokenIds.length;
         require(n > 0, "No tokenIds");
         require(!claimIsPaused, "Claim has been paused");
@@ -155,9 +161,9 @@ contract THE_VESSEL is ERC721, Ownable {
             sumCap += _tokenIds[i];
         }
 
-        require(msg.value == 0.00001 ether * sumCap, "Price incorrect");
+        require(msg.value == PRICE_PER_UNIT * sumCap, "Price incorrect");
 
-        require(_bytes.length <= sumCap, string(abi.encodePacked("Bytes length must be less than or equal to ", LibString.toString(sumCap))));
+        require(_bytes.length <= sumCap, "Bytes exceed capacity");
 
         uint256 offset = 0;
         for (uint256 i = 0; i < n; i++) {
@@ -184,7 +190,7 @@ contract THE_VESSEL is ERC721, Ownable {
             craftToClaimBlock[tokenId] = block.number - blockEvents[1];
             _safeMint(_to, tokenId);
             claimedCount++;
-            emit TokenClaimed(tokenId);
+            //emit TokenClaimed(tokenId);
         }
 
     }
@@ -194,23 +200,30 @@ contract THE_VESSEL is ERC721, Ownable {
         require (!creatorSupplyClaimed);
         
         bytes32 base = keccak256(
-            abi.encodePacked(block.prevrandao, blockhash(block.number - 1), msg.sender, creator1, creator2)
+            abi.encodePacked(
+                block.prevrandao,
+                block.number,
+                block.timestamp,
+                msg.sender,
+                creator1,
+                creator2
+            )
         );
 
-        unchecked {
-            for (uint256 i = 0; i < 50; i++) {
-                uint256 idA = _pickUnused(uint256(keccak256(abi.encodePacked(base, "A", i))));
-                _safeMint(creator1, idA);
-                craftToClaimed[idA] = true;
-                craftToClaimBlock[idA] = 0;
-                claimedCount++;
-                
-                uint256 idB = _pickUnused(uint256(keccak256(abi.encodePacked(base, "B", i))));
-                _safeMint(creator2, idB);
-                craftToClaimed[idB] = true;
-                craftToClaimBlock[idB] = 0;
-                claimedCount++;
-            }
+        
+        for (uint256 i = 0; i < 50;) {
+            uint256 idA = _pickUnused(uint256(keccak256(abi.encodePacked(base, "A", i))));
+            _safeMint(creator1, idA);
+            craftToClaimed[idA] = true;
+            craftToClaimBlock[idA] = 0;
+            claimedCount++;
+            
+            uint256 idB = _pickUnused(uint256(keccak256(abi.encodePacked(base, "B", i))));
+            _safeMint(creator2, idB);
+            craftToClaimed[idB] = true;
+            craftToClaimBlock[idB] = 0;
+            claimedCount++;
+            unchecked { i++; }
         }
         
         creatorSupplyClaimed = true;
@@ -222,26 +235,45 @@ contract THE_VESSEL is ERC721, Ownable {
     //=============== WRITING BYTES TO TOKEN =================//
     //========================================================//
 
+    function setRole(role _r) public {
+        addressToRole[msg.sender] = _r;
+    }
+
     function setPayloadHolder (uint _tokenId, bytes memory _bytes) public onlyHolder(_tokenId) {
         //require (!craftToMachineStatus(_tokenId), "Craft is a machine"); //secret space?
         require (!craftToLocked(_tokenId), "Craft is locked.");
         require (!relics.isRelic(_tokenId), "Craft is a relic.");
         _setPayload(_tokenId, _bytes);
+        emit PayloadSet(_tokenId, _bytes.length);
+        emit MetadataUpdate(_tokenId);
     }
 
     function setMachineHolder (uint _tokenId, address _machine) public onlyHolder(_tokenId) {
         require (craftToMachineStatus(_tokenId), "Craft is not a machine");
         require (!craftToLocked(_tokenId), "Craft is locked.");
         _setMachine (_tokenId, _machine);
+        //emit MetadataUpdate(_tokenId);
     }
 
     function _setMachine (uint _tokenId, address _machine) internal {
-        craftToChosenMachine[_tokenId] = IMachine(_machine);
-    } 
+        require(_machine != address(0), "Invalid machine address");
+        require(_machine.code.length > 0, "Machine must be a contract");
+
+        // Validate interface
+        try IMachine(_machine).name() returns (string memory) {
+            craftToChosenMachine[_tokenId] = IMachine(_machine);
+            emit MachineSet(_tokenId, _machine);
+        } catch {
+            revert("Machine does not implement required interface");
+        }
+        
+    }
 
     function setVaultIterationHolder(uint _tokenId, uint _iteration) public onlyHolder(_tokenId) {
         require (craftToVaultStatus(_tokenId), "Craft is not a vault");
-        craftToIteration[_tokenId] = _iteration;
+        craftToChosenIteration[_tokenId] = _iteration;
+        emit IterationSet(_tokenId, _iteration);
+        //emit MetadataUpdate(_tokenId);
     }
 
     function _setPayload (uint _tokenId, bytes memory _bytes) internal {
@@ -259,6 +291,7 @@ contract THE_VESSEL is ERC721, Ownable {
             payloadList[_tokenId].push(_bytes);
             craftToIteration[_tokenId]++;
         }
+        //emit MetadataUpdate(_tokenId);
     }
 
 
@@ -309,12 +342,12 @@ contract THE_VESSEL is ERC721, Ownable {
     function craftToLockBlock(uint _tokenId) public view returns (uint) {
         if (lockStart == 0) {return type(uint).max;}
         else {
-            return lockStart + _tokenId * blockPerDay / 10;
+            return lockStart + (_tokenId * BLOCKS_PER_DAY) / LOCK_DIVISOR;
         }
     }
 
     function startLockClock() public onlyOwner {
-        require(allClaimed(), "Not all claimed");
+        require(claimedCount == MAX_SUPPLY, "Not all claimed");
         lockStart = block.number;
         emit LockStarted(block.number);
     }
@@ -328,13 +361,13 @@ contract THE_VESSEL is ERC721, Ownable {
     function craftToColorMode(uint _tokenId) public view returns (uint8) {
         uint256 r = uint256(keccak256(abi.encodePacked(blockEvents[0], _tokenId))) % W_TOTAL;
 
-        if (r < W_GREY) return 0;                
+        if (r < W_GREY) return 0;
         r -= W_GREY;
-        if (r < W_RED) return 1;                 
+        if (r < W_RED) return 1;
         r -= W_RED;
-        if (r < W_GREEN) return 2;               
+        if (r < W_GREEN) return 2;
         // else must be blue range
-        return 3;                               
+        return 3; 
     }
 
     function refreshMetadata(uint _tokenId) public {
@@ -352,6 +385,10 @@ contract THE_VESSEL is ERC721, Ownable {
 
     function setRelics(address _relics) public onlyOwner {
         relics = IRelics(_relics);
+    }
+
+    function setDefaultMachine(address _machine) public onlyOwner {
+        defaultMachine = IMachine(_machine);
     }
 
     function setBlockEvent(uint _event, uint _block) public onlyOwner {
@@ -372,27 +409,10 @@ contract THE_VESSEL is ERC721, Ownable {
         return block.number >= blockEvents[1];
     }
 
-    function allClaimed() public view returns (bool) {
-        uint count;
-        for (uint256 i = 1; i <= MAX_SUPPLY; i++) {
-            if (craftToClaimed[i]) count++;
-        }
-        return count == MAX_SUPPLY;
-    }
-
 
     //========================================================//
     //====================== HELPERS =========================//
     //========================================================//
-
-    function indexOf(uint[] memory arr, uint value) internal pure returns (int) {
-        for (uint i = 0; i < arr.length; i++) {
-            if (arr[i] == value) {
-                return int(i); // found at index i
-            }
-        }
-        return -1; // not found
-    }
 
     function _permute(uint256 x) internal view returns (uint256) {
         require(x >= 1 && x <= MAX_SUPPLY, "x out of range");
@@ -416,35 +436,25 @@ contract THE_VESSEL is ERC721, Ownable {
         }
     }
 
-    function _pickUnused(uint256 seed) internal returns (uint256 tokenId) {
-        // Hard cap attempts so it can’t run forever as supply fills
-        for (uint256 attempt = 0; attempt < 200; attempt++) {
-            uint256 id = (seed % MAX_SUPPLY) + 1; // 1..10000
+    function _pickUnused(uint256 seed) internal view returns (uint256 tokenId) {
+        uint256 id = (seed % MAX_SUPPLY) + 1; // 1..10000
+
+        // Walk forward until we find an unclaimed slot
+        for (uint256 i = 0; i < MAX_SUPPLY; i++) {
             if (!craftToClaimed[id]) {
-                craftToClaimed[id] = true;
                 return id;
             }
-            seed = uint256(keccak256(abi.encodePacked(seed, attempt)));
+
+            unchecked {
+                id++;
+                if (id > MAX_SUPPLY) id = 1; // wrap
+            }
         }
-        revert("Could not find unused token");
+
+        revert("No unused tokens left");
     }
 
-    function _isAxiom(uint _tokenId) internal pure returns (bool) {
-        uint256 r = _isqrt(_tokenId);
-        return r * r == _tokenId;
-    }
-
-    function _isqrt(uint256 x) internal pure returns (uint256 r) {
-        if (x == 0) return 0;
-        uint256 z = (x + 1) / 2;
-        r = x;
-        while (z < r) {
-            r = z;
-            z = (x / z + z) / 2;
-        }
-    }
 }
-
 
 
 
