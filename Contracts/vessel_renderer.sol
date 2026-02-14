@@ -54,8 +54,8 @@ contract THE_VESSEL_renderer is Ownable {
     constructor() 
         Ownable(msg.sender)
     {
-        token =     IVesselToken(0xaE9DACe524169FF81EF0F8c129D78c041d5ce987);
-        relics =    IRelics(0x3231477c3d23D1EB79EAFC557560b76Da6bAA148);
+        token =     IVesselToken    (0x711A2077705905205826f9127b270d3c0354971D);
+        relics =    IRelics         (0x3231477c3d23D1EB79EAFC557560b76Da6bAA148);
     }
 
     function tokenURI(uint256 _tokenId) external view returns(string memory) {
@@ -97,7 +97,12 @@ contract THE_VESSEL_renderer is Ownable {
             address m = address(token.craftToMachine(_tokenId));
             if (m != address(0) && m.code.length > 0) {
                 try IMachine(m).name() returns (string memory n) {
-                    machineLine = abi.encodePacked('{"trait_type":"Machine Name","value":"', n, '"}, ');
+                    string memory escapedName = LibString.escapeJSON(n, false);
+                    machineLine = abi.encodePacked(
+                        '{"trait_type":"Machine Name","value":"',
+                        escapedName,
+                        '"}, '
+                    );
                 } catch {}
             }
         }
@@ -310,33 +315,6 @@ contract THE_VESSEL_renderer is Ownable {
         return "Undefined";
     }
 
-
-    // Small helper keeps the caller's stack shallow.
-    // Also split the concatenation into two encodePacked calls to reduce arg count.
-    function _appendPixel(
-        bytes memory svg,
-        uint256 x,
-        uint256 y,
-        uint8 v,
-        uint8 mode
-    ) private pure returns (bytes memory) {
-        bytes memory head = abi.encodePacked(
-            "<rect x='", _u(x),
-            "' y='", _u(y),
-            "' width='1' height='1' fill='rgb("
-        );
-        bytes memory tail = abi.encodePacked(_fillRGB(v, mode), ")'/>");
-        return abi.encodePacked(svg, head, tail);
-    }
-
-    function _fillRGB(uint8 v, uint8 mode) private pure returns (string memory) {
-        string memory s = _u(v);
-        if (mode == 1) return string(abi.encodePacked(s, ",0,0"));      // redscale
-        if (mode == 2) return string(abi.encodePacked("0,", s, ",0"));  // greenscale
-        if (mode == 3) return string(abi.encodePacked("0,0,", s));      // bluescale
-        return string(abi.encodePacked(s, ",", s, ",", s));             // greyscale (default)
-    }
-
     function _min(uint256 a, uint256 b) private pure returns (uint256) {
         return a < b ? a : b;
     }
@@ -377,6 +355,7 @@ contract THE_VESSEL_renderer is Ownable {
             z = (x / z + z) / 2;
         }
     }
+    
 }
 
 
