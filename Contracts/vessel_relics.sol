@@ -29,7 +29,8 @@ contract THE_VESSEL_relics is Ownable {
         require (_bytes.length <= _tokenId);
         RELICS[_tokenId].data = _bytes;
         RELICS[_tokenId].kind = _kind;
-        if (indexOf(relicIds, _tokenId) == -1) {
+        if (!isRelicId[_tokenId]) {
+            isRelicId[_tokenId] = true;
             relicIds.push(_tokenId);
         }
     }
@@ -46,8 +47,10 @@ contract THE_VESSEL_relics is Ownable {
         return RELICS[_tokenId].kind;
     }
 
+    mapping(uint256 => bool) public isRelicId;  // ✅ O(1) lookup
+
     function isRelic(uint _tokenId) public view returns (bool) {
-        return indexOf(relicIds, _tokenId) != -1;
+        return isRelicId[_tokenId];
     }
 
     function readAllRelics() public view returns(bool[10001] memory relicList) {
