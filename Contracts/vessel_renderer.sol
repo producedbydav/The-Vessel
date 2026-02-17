@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import "./base64.sol";
 import "./LibString.sol";
+import "./IFileStore.sol";
 import "@openzeppelin/contracts@5.0.2/access/Ownable.sol";
 
 pragma solidity ^0.8.20;
@@ -49,26 +50,40 @@ contract THE_VESSEL_renderer is Ownable {
     uint8 private constant MODE_GREEN = 2;
     uint8 private constant MODE_BLUE  = 3;
 
+    IFileStore public fileStore;
+
     string[] colors = ["greyscale", "Red", "Green", "Blue"];
 
     constructor() 
         Ownable(msg.sender)
     {
-        token =     IVesselToken    (0x711A2077705905205826f9127b270d3c0354971D);
+        token =     IVesselToken    (0xf789f714184628D55d61609E6Fd4dC583712a16e);
         relics =    IRelics         (0x3231477c3d23D1EB79EAFC557560b76Da6bAA148);
+        fileStore = IFileStore      (0xFe1411d6864592549AdE050215482e4385dFa0FB);
     }
 
     function tokenURI(uint256 _tokenId) external view returns(string memory) {
         require (token.craftToClaimed(_tokenId), "Token has not been claimed yet");
-        string memory svg = craftToSVG(_tokenId);
+        string memory image;
+        string memory prefix;
+        if (token.craftToIteration(_tokenId) != 0 || token.craftToMachineStatus(_tokenId)) {
+            string memory svg = craftToSVG(_tokenId);
+            prefix = 'data:image/svg+xml;base64,';
+            image = Base64.encode(bytes(svg));
+        }
+        else {
+            image = getEmptyImage();
+            prefix = 'data:image/jpeg;base64,';
+        }
         string memory traits = craftToTraits(_tokenId);
         string memory json = Base64.encode(
             bytes(
                 string(
                     abi.encodePacked(
                         '{"name":"Craft #', LibString.toString(_tokenId),
-                        '","image": "data:image/svg+xml;base64,',
-                        Base64.encode(bytes(svg)),
+                        '","image": "',
+                        prefix,
+                        image,
                         '","attributes": [',
                             traits,
                         ']}'
@@ -134,6 +149,12 @@ contract THE_VESSEL_renderer is Ownable {
         if (imgSource.length == 0) imgSource = new bytes(_tokenId);
         string memory svg = render(imgSource, token.craftToColorMode(_tokenId), _tokenId);
         return svg;
+    }
+
+    function getEmptyImage() public view returns (string memory) {
+        string memory name = "test.jpg";
+        string memory img = fileStore.getFile(name).read();
+        return img;
     }
 
     function setTokenContract (address _a) public onlyOwner {
@@ -357,5 +378,3 @@ contract THE_VESSEL_renderer is Ownable {
     }
     
 }
-
-
