@@ -5,7 +5,6 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts@5.0.2/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts@5.0.2/access/Ownable.sol";
-import "./LibString.sol";
 
 interface IExternalRenderer {
     function tokenURI(uint256 _tokenId) external view returns (string memory);
@@ -40,8 +39,8 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     uint public constant PRICE_PER_UNIT = 0.00001 ether;
     uint public constant LOCK_DIVISOR = 10;
 
-    address creator1 = 0xCcf0a1307E5e5Ad04E85d94d7f9D400390F0118a;
-    address creator2 = 0x28940210Fc7Af79B154265AeaD728541405A0ecD;
+    address immutable creator1 = 0xCcf0a1307E5e5Ad04E85d94d7f9D400390F0118a;
+    address immutable creator2 = 0x28940210Fc7Af79B154265AeaD728541405A0ecD;
 
     mapping (uint => uint) public blockEvents;
 
@@ -52,36 +51,60 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         merchant
     }
 
+    mapping (uint => bytes[]) private           payloadList;
     mapping (address => role) public            addressToRole;
     mapping (uint => role) public               craftToRole;
     mapping (uint => bool) public               craftToClaimed;
     mapping (uint => uint) public               craftToClaimBlock;
-    mapping (uint => bytes[]) public            payloadList;
     mapping (uint => uint) public               craftToIteration;
     mapping (uint => uint) public               craftToChosenIteration;
     mapping (uint => IMachine) public           craftToChosenMachine;
+    mapping (uint => address) public            craftToDelegate;
     IMachine public                             defaultMachine;
+
+    error AlreadyClaimed();
+    error OutOfRange();
+    error MustBeHolder();
+    error MustBeHolderOrDelegate();
+    error ClaimPaused();
+    error ClaimNotActive();
+    error CraftLocked();
+    error PriceIncorrect();
+    error BytesExceedCapacity();
+    error InvalidMachine();
+    error Locked();
+    error IsRelic();
+    error WrongType();
+    error NotAllClaimed();
 
     modifier  notClaimed (uint[] memory _tokenIds) {
         for (uint i = 0; i < _tokenIds.length; i++){
-            require (!craftToClaimed[_tokenIds[i]], "Already claimed");
-            require (_tokenIds[i] >= 1 && _tokenIds[i] <= MAX_SUPPLY, "Out of range");
+            if (craftToClaimed[_tokenIds[i]]) revert AlreadyClaimed();
+            if (_tokenIds[i] < 1 || _tokenIds[i] > MAX_SUPPLY) revert OutOfRange();
         }
         _;
     }
 
     modifier  onlyHolder (uint _tokenId) {
-        require (msg.sender == ownerOf(_tokenId), "Must be holder of token");
+        if (msg.sender != ownerOf(_tokenId)) revert MustBeHolder();
+        _;
+    }
+
+    modifier  onlyHolderOrDelegate (uint _tokenId) {
+        if (
+            craftToDelegate[_tokenId] == address(0) && msg.sender != ownerOf(_tokenId) || 
+            craftToDelegate[_tokenId] != address(0)  && msg.sender != craftToDelegate[_tokenId]
+        )
+        revert MustBeHolderOrDelegate();
         _;
     }
 
     modifier whenActive() {
-        require (claimIsActive(), "Claiming is not active");
+        if (!claimIsActive()) revert ClaimNotActive();
         _;
     }
 
     event MetadataUpdate    (uint _tokenId);
-    //event TokenClaimed      (uint _tokenId);
     event LockStarted       (uint _blocknum);
     event PayloadSet        (uint _tokenId, uint _length);
     event MachineSet        (uint _tokenId, address _machine);
@@ -149,21 +172,21 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         uint256[] memory _tokenIds,
         bytes memory _bytes,
         address _machine
-    ) public payable notClaimed(_tokenIds) whenActive 
-        //nonReentrant 
+    ) public payable notClaimed(_tokenIds) 
+        whenActive 
+        nonReentrant 
         {
         uint256 n = _tokenIds.length;
-        require(n > 0, "No tokenIds");
-        require(!claimIsPaused, "Claim has been paused");
+        if (claimIsPaused) revert ClaimPaused();
 
         uint256 sumCap;
         for (uint256 i = 0; i < n; i++) {
             sumCap += _tokenIds[i];
         }
 
-        require(msg.value == PRICE_PER_UNIT * sumCap, "Price incorrect");
+        if (msg.value != PRICE_PER_UNIT * sumCap) revert PriceIncorrect();
 
-        require(_bytes.length <= sumCap, "Bytes exceed capacity");
+        if (_bytes.length > sumCap) revert BytesExceedCapacity();
 
         uint256 offset = 0;
         for (uint256 i = 0; i < n; i++) {
@@ -184,13 +207,12 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
                 _setMachine(tokenId, _machine);
             }
 
-            _setPayload(tokenId, chunk); // ok with empty bytes if we're out
+            if (chunk.length != 0) {_setPayload(tokenId, chunk);} // ok with empty bytes if we're out
             craftToClaimed[tokenId] = true;
             craftToRole[tokenId] = addressToRole[msg.sender];
             craftToClaimBlock[tokenId] = block.number - blockEvents[1];
             _safeMint(_to, tokenId);
             claimedCount++;
-            //emit TokenClaimed(tokenId);
         }
 
     }
@@ -239,46 +261,38 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         addressToRole[msg.sender] = _r;
     }
 
-    function setPayloadHolder (uint _tokenId, bytes memory _bytes) public onlyHolder(_tokenId) {
-        //require (!craftToMachineStatus(_tokenId), "Craft is a machine"); //secret space?
-        require (!craftToLocked(_tokenId), "Craft is locked.");
-        require (!relics.isRelic(_tokenId), "Craft is a relic.");
+    function setPayloadHolder (uint _tokenId, bytes memory _bytes) public onlyHolderOrDelegate(_tokenId) {
+        if (craftToMachineStatus(_tokenId)) revert WrongType();
+        if (craftToLocked(_tokenId)) revert CraftLocked();
+        if (relics.isRelic(_tokenId)) revert IsRelic();
         _setPayload(_tokenId, _bytes);
         emit PayloadSet(_tokenId, _bytes.length);
         emit MetadataUpdate(_tokenId);
     }
 
     function setMachineHolder (uint _tokenId, address _machine) public onlyHolder(_tokenId) {
-        require (craftToMachineStatus(_tokenId), "Craft is not a machine");
-        require (!craftToLocked(_tokenId), "Craft is locked.");
+        if (craftToLocked(_tokenId)) revert CraftLocked();
+        if (!craftToMachineStatus(_tokenId)) revert WrongType();
         _setMachine (_tokenId, _machine);
-        //emit MetadataUpdate(_tokenId);
-    }
-
-    function _setMachine (uint _tokenId, address _machine) internal {
-        require(_machine != address(0), "Invalid machine address");
-        require(_machine.code.length > 0, "Machine must be a contract");
-
-        // Validate interface
-        try IMachine(_machine).name() returns (string memory) {
-            craftToChosenMachine[_tokenId] = IMachine(_machine);
-            emit MachineSet(_tokenId, _machine);
-        } catch {
-            revert("Machine does not implement required interface");
-        }
-        
+        emit MetadataUpdate(_tokenId);
     }
 
     function setVaultIterationHolder(uint _tokenId, uint _iteration) public onlyHolder(_tokenId) {
-        require (craftToVaultStatus(_tokenId), "Craft is not a vault");
+        if (!craftToVaultStatus(_tokenId)) revert WrongType();
         craftToChosenIteration[_tokenId] = _iteration;
         emit IterationSet(_tokenId, _iteration);
-        //emit MetadataUpdate(_tokenId);
+        emit MetadataUpdate(_tokenId);
+    }
+
+    function _setMachine (uint _tokenId, address _machine) internal {
+        if (_machine == address(0) || _machine.code.length == 0) revert InvalidMachine();
+        craftToChosenMachine[_tokenId] = IMachine(_machine);
+        emit MachineSet(_tokenId, _machine);
     }
 
     function _setPayload (uint _tokenId, bytes memory _bytes) internal {
-        require (_bytes.length <= _tokenId, "String too long"); 
-        if (lockStart != 0) {require (craftToLockBlock(_tokenId) > block.number, "Token is locked");}
+        if (craftToLocked(_tokenId)) revert CraftLocked();
+        if (_bytes.length > _tokenId) revert BytesExceedCapacity();
         if (!craftToVaultStatus(_tokenId)) {   //capsule
             if (craftToIteration[_tokenId] == 0) {
                 payloadList[_tokenId].push(_bytes);
@@ -291,7 +305,6 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
             payloadList[_tokenId].push(_bytes);
             craftToIteration[_tokenId]++;
         }
-        //emit MetadataUpdate(_tokenId);
     }
 
 
@@ -347,7 +360,7 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     }
 
     function startLockClock() public onlyOwner {
-        require(claimedCount == MAX_SUPPLY, "Not all claimed");
+        if(claimedCount < MAX_SUPPLY) revert NotAllClaimed();
         lockStart = block.number;
         emit LockStarted(block.number);
     }
