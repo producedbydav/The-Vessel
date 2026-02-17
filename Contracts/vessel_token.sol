@@ -109,6 +109,8 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     event PayloadSet        (uint _tokenId, uint _length);
     event MachineSet        (uint _tokenId, address _machine);
     event IterationSet      (uint _tokenId, uint _iteration);
+    event DelegateSet       (uint _tokenId, address _delegate);
+    event RoleSet           (address _user, role _role);
 
     IExternalRenderer public renderer;
 
@@ -118,9 +120,9 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     {
         blockEvents[0] = block.number;
         blockEvents[1] = block.number + 50000;
-        defaultMachine = IMachine(0x4bc881B11019df89330F4bE3fa573183F452c05d);
-        renderer = IExternalRenderer(0x4730dd1b1e477BE374F201571A7E555Da81ab979);
-        relics = IRelics(0x3231477c3d23D1EB79EAFC557560b76Da6bAA148);
+        defaultMachine =    IMachine(0x4bc881B11019df89330F4bE3fa573183F452c05d);
+        renderer =          IExternalRenderer(0x4730dd1b1e477BE374F201571A7E555Da81ab979);
+        relics =            IRelics(0x96DbC03929F07339EbC105E4341Cabb8aE586682);
     }
 
     function craftToPayload(uint _tokenId) public view returns (bytes memory payload) {
@@ -238,18 +240,25 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
             _safeMint(creator1, idA);
             craftToClaimed[idA] = true;
             craftToClaimBlock[idA] = 0;
+            craftToRole[idA] = role.navigator;
             claimedCount++;
             
             uint256 idB = _pickUnused(uint256(keccak256(abi.encodePacked(base, "B", i))));
             _safeMint(creator2, idB);
             craftToClaimed[idB] = true;
             craftToClaimBlock[idB] = 0;
+            craftToRole[idB] = role.navigator;
             claimedCount++;
             unchecked { i++; }
         }
         
         creatorSupplyClaimed = true;
 
+    }
+
+    function vaultToEntry(uint _tokenId, uint _entry) public view returns (bytes memory) {
+        if (!craftToVaultStatus(_tokenId)) {revert WrongType();}
+        return payloadList[_tokenId][_entry];
     }
 
 
@@ -259,6 +268,7 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
 
     function setRole(role _r) public {
         addressToRole[msg.sender] = _r;
+        emit RoleSet(msg.sender, _r);
     }
 
     function setPayloadHolder (uint _tokenId, bytes memory _bytes) public onlyHolderOrDelegate(_tokenId) {
@@ -305,6 +315,11 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
             payloadList[_tokenId].push(_bytes);
             craftToIteration[_tokenId]++;
         }
+    }
+
+    function setDelegate(uint _tokenId, address _delegate) public onlyHolder(_tokenId) {
+        craftToDelegate[_tokenId] = _delegate;
+        emit DelegateSet(_tokenId, _delegate);
     }
 
 
@@ -468,7 +483,3 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     }
 
 }
-
-
-
-
