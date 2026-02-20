@@ -16,12 +16,12 @@ interface IVesselToken {
     function craftToColorMode(uint256 tokenId) external view returns (uint8);
     function craftToLockBlock(uint _tokenId) external view returns (uint);
     function craftToLocked(uint _tokenId) external view returns (bool);
-    function craftToIteration(uint _tokenId) external view returns (uint);
+    function craftToEntry(uint _tokenId) external view returns (uint);
     function craftToClaimBlock(uint _tokenId) external view returns (uint);
     function craftToClaimed(uint _tokenId) external view returns (bool);    
     function craftToMachineStatus(uint _tokenId) external view returns (bool);
     function craftToType(uint _tokenId) external view returns (string memory);
-    function craftToChosenIteration(uint _tokenId) external view returns (uint);
+    function craftToChosenEntry(uint _tokenId) external view returns (uint);
     function lockStart() external view returns (uint);
     enum role {
         undefined,
@@ -49,14 +49,14 @@ contract THE_VESSEL_relics is Ownable {
     uint[] public relicIds;
 
     constructor()  Ownable(msg.sender) {
-        vessel =     IVesselToken    (0x711A2077705905205826f9127b270d3c0354971D);
+        vessel =     IVesselToken    (0x353433fc2468B08CeF3eD1bEec4b43e25D49C311);
     }
 
     function addRelic(uint _tokenId, bytes[] memory _bytes, string memory _kind) public onlyOwner {
         require (_bytes.length <= _tokenId);
 
         for (uint i = 0; i < _bytes.length; i++) {
-            RELICS[_tokenId].data[i] = _bytes[i];
+            RELICS[_tokenId].data.push(_bytes[i]);
         }
 
         RELICS[_tokenId].kind = _kind;
@@ -75,6 +75,28 @@ contract THE_VESSEL_relics is Ownable {
         RELICS[_tokenId].kind = _kind;
     }
 
+    function removeRelic(uint256 _tokenId) external onlyOwner {
+        require(isRelicId[_tokenId], "Not a relic");
+
+        // clear the relic data
+        delete RELICS[_tokenId];
+        isRelicId[_tokenId] = false;
+
+        // find in relicIds (O(n)) and swap+pop
+        uint256 len = relicIds.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (relicIds[i] == _tokenId) {
+                uint256 lastIdx = len - 1;
+                if (i != lastIdx) {
+                    relicIds[i] = relicIds[lastIdx];
+                }
+                relicIds.pop();
+                break;
+            }
+        }
+    }
+
+
     function relicToPayload(uint _tokenId) external view returns (bytes memory payload) {
         token memory t = RELICS[_tokenId];
         if (vessel.craftToMachineStatus(_tokenId)) {
@@ -82,11 +104,11 @@ contract THE_VESSEL_relics is Ownable {
         } else {
             bytes[] storage arr = RELICS[_tokenId].data;
 
-            // For vaults: read selector; for others: read "current iteration" (latest)
+            // For vaults: read selector; for others: read "current Entry" (latest)
             uint it;
             if (vessel.craftToVaultStatus(_tokenId)) {
-                it = vessel.craftToChosenIteration(_tokenId);
-                if (it == 0) it = vessel.craftToIteration(_tokenId); // default to latest
+                it = vessel.craftToChosenEntry(_tokenId);
+                if (it == 0) it = vessel.craftToEntry(_tokenId); // default to latest
             } else {
                 it = 1;
             }
@@ -97,7 +119,7 @@ contract THE_VESSEL_relics is Ownable {
                 // capsule, first write
                 payload = arr[0];
             } else if (it >= 1 && it <= arr.length) {
-                // vault/capsule: iteration is 1-based, storage is 0-based
+                // vault/capsule: Entry is 1-based, storage is 0-based
                 payload = arr[it - 1];
             } else {
                 // out-of-range protection
@@ -107,19 +129,16 @@ contract THE_VESSEL_relics is Ownable {
 
     }
 
+    function setVesselContract(address _a) public onlyOwner {
+        vessel = IVesselToken(_a);
+    }
+
     function getTokenKind(uint _tokenId) external view returns (string memory) {
         return RELICS[_tokenId].kind;
     }
 
     function isRelic(uint _tokenId) public view returns (bool) {
         return isRelicId[_tokenId];
-    }
-
-    function readAllRelics() public view returns(bool[10001] memory relicList) {
-        relicList[0] = false;
-        for (uint i = 1; i <= 10000; i++) {
-            relicList[i] = isRelic(i);
-        }
     }
 
 }
