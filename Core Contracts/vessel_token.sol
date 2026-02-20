@@ -9,6 +9,7 @@ import "@openzeppelin/contracts@5.0.2/access/Ownable.sol";
 interface IExternalRenderer {
     function tokenURI(uint256 _tokenId) external view returns (string memory);
     function craftToSVG(uint _tokenId) external view returns (string memory);
+    function contractURI() external view returns (string memory);
 }
 
 interface IMachine {
@@ -56,8 +57,8 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     mapping (uint => role) public               craftToRole;
     mapping (uint => bool) public               craftToClaimed;
     mapping (uint => uint) public               craftToClaimBlock;
-    mapping (uint => uint) public               craftToIteration;
-    mapping (uint => uint) public               craftToChosenIteration;
+    mapping (uint => uint) public               craftToEntry;
+    mapping (uint => uint) public               craftToChosenEntry;
     mapping (uint => IMachine) public           craftToChosenMachine;
     mapping (uint => address) public            craftToDelegate;
     IMachine public                             defaultMachine;
@@ -76,7 +77,9 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     error IsRelic();
     error WrongType();
     error NotAllClaimed();
-
+    error CraftNotClaimed();
+    error OutOfRangeEntry();
+    
     modifier  notClaimed (uint[] memory _tokenIds) {
         for (uint i = 0; i < _tokenIds.length; i++){
             if (craftToClaimed[_tokenIds[i]]) revert AlreadyClaimed();
@@ -108,20 +111,19 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     event LockStarted       (uint _blocknum);
     event PayloadSet        (uint _tokenId, uint _length);
     event MachineSet        (uint _tokenId, address _machine);
-    event IterationSet      (uint _tokenId, uint _iteration);
+    event EntrySet          (uint _tokenId, uint _Entry);
     event DelegateSet       (uint _tokenId, address _delegate);
     event RoleSet           (address _user, role _role);
 
     IExternalRenderer public renderer;
 
-    constructor()
+    constructor()                                                                                           
         ERC721("The Vessel", "VESSEL")
         Ownable(msg.sender)
     {
         blockEvents[0] = block.number;
-        blockEvents[1] = block.number + 50000;
+        blockEvents[1] = block.number + 50400;
         defaultMachine =    IMachine(0x4bc881B11019df89330F4bE3fa573183F452c05d);
-        renderer =          IExternalRenderer(0x4730dd1b1e477BE374F201571A7E555Da81ab979);
         relics =            IRelics(0x96DbC03929F07339EbC105E4341Cabb8aE586682);
     }
 
@@ -140,13 +142,13 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         else {
             bytes[] storage arr = payloadList[_tokenId];
 
-            // For vaults: read selector; for others: read "current iteration" (latest)
+            // For vaults: read selector; for others: read "current Entry" (latest)
             uint it;
             if (craftToVaultStatus(_tokenId)) {
-                it = craftToChosenIteration[_tokenId];
-                if (it == 0) it = craftToIteration[_tokenId]; // default to latest
+                it = craftToChosenEntry[_tokenId];
+                if (it == 0) it = craftToEntry[_tokenId]; // default to latest
             } else {
-                it = craftToIteration[_tokenId];
+                it = craftToEntry[_tokenId];
             }
 
             if (arr.length == 0) {
@@ -155,7 +157,7 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
                 // capsule, first write
                 payload = arr[0];
             } else if (it >= 1 && it <= arr.length) {
-                // vault/capsule: iteration is 1-based, storage is 0-based
+                // vault/capsule: Entry is 1-based, storage is 0-based
                 payload = arr[it - 1];
             } else {
                 // out-of-range protection
@@ -287,10 +289,11 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         emit MetadataUpdate(_tokenId);
     }
 
-    function setVaultIterationHolder(uint _tokenId, uint _iteration) public onlyHolder(_tokenId) {
-        if (!craftToVaultStatus(_tokenId)) revert WrongType();
-        craftToChosenIteration[_tokenId] = _iteration;
-        emit IterationSet(_tokenId, _iteration);
+    function setVaultEntryHolder(uint _tokenId, uint _entry) public onlyHolder(_tokenId) {
+        if (!craftToVaultStatus(_tokenId)) revert OutOfRangeEntry();
+        if (_entry > craftToEntry[_tokenId]) revert WrongType();
+        craftToChosenEntry[_tokenId] = _entry;
+        emit EntrySet(_tokenId, _entry);
         emit MetadataUpdate(_tokenId);
     }
 
@@ -304,16 +307,16 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         if (craftToLocked(_tokenId)) revert CraftLocked();
         if (_bytes.length > _tokenId) revert BytesExceedCapacity();
         if (!craftToVaultStatus(_tokenId)) {   //capsule
-            if (craftToIteration[_tokenId] == 0) {
+            if (craftToEntry[_tokenId] == 0) {
                 payloadList[_tokenId].push(_bytes);
-                craftToIteration[_tokenId]++;
+                craftToEntry[_tokenId]++;
             } else {
                 payloadList[_tokenId][0] = _bytes;
             }
         } 
         else {                                  //vault
             payloadList[_tokenId].push(_bytes);
-            craftToIteration[_tokenId]++;
+            craftToEntry[_tokenId]++;
         }
     }
 
@@ -328,8 +331,12 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     //========================================================//
 
     function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
-        require(_ownerOf(_tokenId) != address(0), "Does not exist");
+        if (_ownerOf(_tokenId) == address(0)) revert CraftNotClaimed();
         return renderer.tokenURI(_tokenId);
+    }
+
+    function contractURI() external view returns (string memory) {
+        return renderer.contractURI();
     }
 
     function craftToSVG(uint _tokenId) external view returns (string memory) {
@@ -425,7 +432,7 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
 
     function withdraw() external onlyOwner{
         uint256 bal = address(this).balance;
-        (bool ok, ) = payable(owner()).call{value: bal}("");
+        (bool ok, ) = payable(creator1).call{value: bal}("");
         require(ok, "ETH transfer failed");
     }
 
