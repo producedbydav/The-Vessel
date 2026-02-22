@@ -44,27 +44,31 @@ contract THE_VESSEL_relics is Ownable {
     }
 
     mapping (uint => token) public RELICS;
-    mapping(uint256 => bool) public isRelicId;
+    mapping(uint256 => uint256) public relicIdToIndex;
     
     uint[] public relicIds;
 
+    error RelicAlreadyExists();
+    error RelicDoesNotExist();
+    error BytesTooLong();
+    
     constructor()  Ownable(msg.sender) {
         vessel =     IVesselToken    (0x353433fc2468B08CeF3eD1bEec4b43e25D49C311);
     }
 
-    function addRelic(uint _tokenId, bytes[] memory _bytes, string memory _kind) public onlyOwner {
-        require (_bytes.length <= _tokenId);
+    function addRelic(uint _tokenId, bytes[] memory _bytes, address _machine, string memory _kind) public onlyOwner {
+        if (_bytes.length > _tokenId) revert BytesTooLong();
+        if (_exists(_tokenId)) revert RelicAlreadyExists();
 
         for (uint i = 0; i < _bytes.length; i++) {
             RELICS[_tokenId].data.push(_bytes[i]);
         }
 
         RELICS[_tokenId].kind = _kind;
+        RELICS[_tokenId].machine = _machine;
 
-        if (!isRelicId[_tokenId]) {
-            isRelicId[_tokenId] = true;
-            relicIds.push(_tokenId);
-        }
+        relicIdToIndex[_tokenId] = relicIds.length;
+        relicIds.push(_tokenId);
     }
 
     function editRelic(uint _tokenId, bytes memory _bytes, uint _index) public onlyOwner {
@@ -75,27 +79,22 @@ contract THE_VESSEL_relics is Ownable {
         RELICS[_tokenId].kind = _kind;
     }
 
-    function removeRelic(uint256 _tokenId) external onlyOwner {
-        require(isRelicId[_tokenId], "Not a relic");
+    function removeRelic(uint _tokenId) public onlyOwner {
+        if (!_exists(_tokenId)) revert RelicDoesNotExist();
 
-        // clear the relic data
-        delete RELICS[_tokenId];
-        isRelicId[_tokenId] = false;
+        uint256 index = relicIdToIndex[_tokenId];
+        uint256 lastIndex = relicIds.length - 1;
 
-        // find in relicIds (O(n)) and swap+pop
-        uint256 len = relicIds.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (relicIds[i] == _tokenId) {
-                uint256 lastIdx = len - 1;
-                if (i != lastIdx) {
-                    relicIds[i] = relicIds[lastIdx];
-                }
-                relicIds.pop();
-                break;
-            }
+        if (index != lastIndex) {
+            uint256 lastId = relicIds[lastIndex];
+            relicIds[index] = lastId;
+            relicIdToIndex[lastId] = index;
         }
-    }
 
+        relicIds.pop();
+        delete relicIdToIndex[_tokenId];
+        delete RELICS[_tokenId]; // clears kind + data array storage
+    }
 
     function relicToPayload(uint _tokenId) external view returns (bytes memory payload) {
         token memory t = RELICS[_tokenId];
@@ -138,7 +137,11 @@ contract THE_VESSEL_relics is Ownable {
     }
 
     function isRelic(uint _tokenId) public view returns (bool) {
-        return isRelicId[_tokenId];
+        return _exists(_tokenId);
+    }
+
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return RELICS[tokenId].data.length != 0;
     }
 
 }
