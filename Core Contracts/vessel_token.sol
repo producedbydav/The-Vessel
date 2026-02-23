@@ -30,32 +30,36 @@ interface IMachine {
 }
 
 interface IRelics {
-    function RELICS(uint _tokenId) external view returns (string memory kind, bytes memory data);
+    function RELICS(uint _tokenId) external view returns (relic memory);
     function relicIds(uint256) external view returns (uint256);
     function relicToPayload(uint _tokenId) external view returns (bytes memory);
     function relicToKind(uint _tokenId) external view returns (string memory);
     function isRelic(uint _tokenId) external view returns (bool);
+    struct relic {
+        string kind;
+        bytes[] data;
+        address machine;
+    }
 }
 
 contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
 
-    IRelics public relics;
-    uint amountMachines = 1500;
-    uint amountVault = 3650; //4850 3650 1500
+    uint constant AMOUNT_MACHINES   = 1500;
+    uint constant AMOUNT_VAULTS     = 3650;
+    uint constant AMOUNT_CAPSULES   = 4850;
+
+    uint public constant MAX_SUPPLY     = 10000;
+    uint public constant BLOCKS_PER_DAY = 7200;
+    uint public constant LOCK_DIVISOR   = 10;
+    uint public constant PRICE_PER_UNIT = 0.00001 ether;
+
     uint public lockStart;
     uint public claimedCount;
     bool public claimIsPaused;
     bool public creatorSupplyClaimed;
 
-    uint public constant MAX_SUPPLY = 10000;
-    uint public constant BLOCKS_PER_DAY = 7200;
-    uint public constant PRICE_PER_UNIT = 0.00001 ether;
-    uint public constant LOCK_DIVISOR = 10;
-
     address immutable creator1 = 0xCcf0a1307E5e5Ad04E85d94d7f9D400390F0118a;
-    address immutable creator2 = 0x28940210Fc7Af79B154265AeaD728541405A0ecD;
-
-    mapping (uint => uint) public blockEvents;
+    address immutable creator2 = 0xCB7504C4cb986E80AB4983b44263381F21273482;
 
     enum role {
         undefined,
@@ -73,6 +77,11 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     mapping (uint => uint) public               craftToChosenEntry;
     mapping (uint => IMachine) public           craftToChosenMachine;
     mapping (uint => address) public            craftToDelegate;
+    mapping (uint => uint) public               blockEvents;
+    mapping (uint => bool) public               blockEventLock;
+
+    IExternalRenderer public                    renderer;
+    IRelics public                              relics;
     IMachine public                             defaultMachine;
 
     error AlreadyClaimed();
@@ -91,6 +100,8 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     error NotAllClaimed();
     error CraftNotClaimed();
     error OutOfRangeEntry();
+    error EventLocked();
+    error RelicCannotBatch();
     
     modifier  notClaimed (uint[] memory _tokenIds) {
         for (uint i = 0; i < _tokenIds.length; i++){
@@ -125,16 +136,13 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     event DelegateSet       (uint _tokenId, address _delegate);
     event RoleSet           (address _user, role _role);
 
-    IExternalRenderer public renderer;
-
     constructor()                                                                                           
         ERC721("The Vessel", "VESSEL")
         Ownable(msg.sender)
     {
         blockEvents[0] = block.number;
         blockEvents[1] = block.number + 50400;
-        defaultMachine =    IMachine(0x4bc881B11019df89330F4bE3fa573183F452c05d);
-        relics =            IRelics(0x96DbC03929F07339EbC105E4341Cabb8aE586682);
+        blockEventLock[0] = true;
     }
 
     function craftToPayload(uint _tokenId) public view returns (bytes memory payload) {
@@ -191,7 +199,14 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         nonReentrant 
         {
         uint256 n = _tokenIds.length;
+
         if (claimIsPaused) revert ClaimPaused();
+        
+        if (_tokenIds.length > 1) {
+            for (uint i; i < _tokenIds.length; ++i) {
+                if (relics.isRelic(_tokenIds[i])) revert RelicCannotBatch();
+            }
+        }
 
         uint256 sumCap;
         for (uint256 i = 0; i < n; i++) {
@@ -292,16 +307,16 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
         emit MetadataUpdate(_tokenId);
     }
 
-    function setMachineHolder (uint _tokenId, address _machine) public onlyHolder(_tokenId) {
+    function setMachineHolder (uint _tokenId, address _machine) public onlyHolderOrDelegate(_tokenId) {
         if (craftToLocked(_tokenId)) revert CraftLocked();
         if (!craftToMachineStatus(_tokenId)) revert WrongType();
         _setMachine (_tokenId, _machine);
         emit MetadataUpdate(_tokenId);
     }
 
-    function setVaultEntryHolder(uint _tokenId, uint _entry) public onlyHolder(_tokenId) {
-        if (!craftToVaultStatus(_tokenId)) revert OutOfRangeEntry();
-        if (_entry > craftToEntry[_tokenId]) revert WrongType();
+    function setVaultEntryHolder(uint _tokenId, uint _entry) public onlyHolderOrDelegate(_tokenId) {
+        if (!craftToVaultStatus(_tokenId)) revert WrongType();
+        if (_entry > craftToEntry[_tokenId]) revert OutOfRangeEntry();
         craftToChosenEntry[_tokenId] = _entry;
         emit EntrySet(_tokenId, _entry);
         emit MetadataUpdate(_tokenId);
@@ -376,12 +391,12 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
 
     function craftToMachineStatus(uint _tokenId) public view returns (bool) {
         uint256 r = _permute(_tokenId);
-        return r <= amountMachines;
+        return r <= AMOUNT_MACHINES;
     }
 
     function craftToVaultStatus(uint _tokenId) public view returns (bool) {
         uint256 r = _permute(_tokenId);
-        return r >= amountMachines && r <= amountMachines + amountVault;
+        return r >= AMOUNT_MACHINES && r <= AMOUNT_MACHINES + AMOUNT_VAULTS;
     }
 
     function craftToLockBlock(uint _tokenId) public view returns (uint) {
@@ -393,13 +408,14 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
 
     function startLockClock() public onlyOwner {
         if(claimedCount < MAX_SUPPLY) revert NotAllClaimed();
+        require(lockStart == 0);
         lockStart = block.number;
         emit LockStarted(block.number);
     }
 
     uint32 private constant W_GREY  = 9540;
     uint32 private constant W_GREEN =  100;
-    uint32 private constant W_RED   =  40;
+    uint32 private constant W_RED   =   40;
     uint32 private constant W_BLUE  =   15; 
     uint32 private constant W_TOTAL = W_GREY + W_RED + W_GREEN + W_BLUE;
 
@@ -437,7 +453,12 @@ contract THE_VESSEL is ERC721, Ownable, ReentrancyGuard {
     }
 
     function setBlockEvent(uint _event, uint _block) public onlyOwner {
+        if (blockEventLock[_event]) revert EventLocked();
         blockEvents[_event] = _block;
+    }
+
+    function lockEvent(uint _event) public onlyOwner {
+        blockEventLock[_event] = true;
     }
 
     function withdraw() external onlyOwner{
