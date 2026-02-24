@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
 import "./base64.sol";
 import "./LibString.sol";
 import "./IFileStore.sol";
 import "@openzeppelin/contracts@5.0.2/access/Ownable.sol";
-
-pragma solidity ^0.8.20;
 
 interface IVesselToken {
     function craftToPayload(uint _tokenId) external view returns (bytes memory);
@@ -29,11 +29,18 @@ interface IVesselToken {
 }
 
 interface IRelics {
-    function RELICS(uint _tokenId) external view returns (string memory kind, bytes memory data);
-    function relicIds(uint256) external view returns (uint256); // auto getter for public array
+    function RELICS(uint _tokenId) external view returns (relic memory);
+    function relicIds(uint256) external view returns (uint256);
     function relicToPayload(uint _tokenId) external view returns (bytes memory);
-    function relicToKind(uint _tokenId) external view returns (string memory);
+    function getTokenKind(uint _tokenId) external view returns (string memory);
     function isRelic(uint _tokenId) external view returns (bool);
+    function getTokenEntries(uint _tokenId) external view returns (uint);
+    struct relic {
+        string kind;
+        bytes[] data;
+        uint entries;
+        address machine;
+    }
 }
 
 interface IMachine {
@@ -41,15 +48,10 @@ interface IMachine {
     function name() external view returns (string memory);
 }
 
-interface IMetadataExtention {
-    function metadataExtension(uint _tokenId) external view returns (string memory);
-}
-
 contract THE_VESSEL_renderer is Ownable {
 
     IVesselToken        public token;
     IRelics             public relics;
-    IMetadataExtention  public extention;
     uint8 private constant MODE_GREY  = 0;
     uint8 private constant MODE_RED   = 1;
     uint8 private constant MODE_GREEN = 2;
@@ -62,8 +64,8 @@ contract THE_VESSEL_renderer is Ownable {
     constructor() 
         Ownable(msg.sender)
     {
-        token =     IVesselToken    (0x353433fc2468B08CeF3eD1bEec4b43e25D49C311);
-        relics =    IRelics         (0x3231477c3d23D1EB79EAFC557560b76Da6bAA148);
+        token =     IVesselToken    (0xECb92Cc7112b80A2234936315BbB493fb48d1463);
+        relics =    IRelics         (0x48cB121Fa84b7C08692e74872D044B15369977CD);
         fileStore = IFileStore      (0xFe1411d6864592549AdE050215482e4385dFa0FB);
     }
 
@@ -71,7 +73,7 @@ contract THE_VESSEL_renderer is Ownable {
         require (token.craftToClaimed(_tokenId), "Token has not been claimed yet");
         string memory image;
         string memory prefix;
-        if (token.craftToEntry(_tokenId) != 0 || token.craftToMachineStatus(_tokenId)) {
+        if (token.craftToEntry(_tokenId) != 0 || token.craftToMachineStatus(_tokenId) || relics.isRelic(_tokenId)) {
             string memory svg = craftToSVG(_tokenId);
             prefix = 'data:image/svg+xml;base64,';
             image = Base64.encode(bytes(svg));
@@ -107,14 +109,15 @@ contract THE_VESSEL_renderer is Ownable {
         string memory typeStr = token.craftToType(_tokenId);
         string memory roleStr = roleToString(_tokenId);
         string memory color = colors[token.craftToColorMode(_tokenId)];
+        
+        uint entryCount;
+        if (relics.isRelic(_tokenId)) {
+            entryCount = relics.getTokenEntries(_tokenId);
+        } else {
+            entryCount = token.craftToEntry(_tokenId);
+        }
 
-        bytes memory colorLine = (token.craftToColorMode(_tokenId) != 0) ? abi.encodePacked     ('{"trait_type": "Color", "value": "', color, '"}, ') : new bytes(0);
-        bytes memory axiomLine = _isAxiom(_tokenId) ? abi.encodePacked                          ('{"trait_type": "Axiom", "value": "True"}, ') : new bytes(0);
-        bytes memory relicLine = relics.isRelic(_tokenId) ? abi.encodePacked                    ('{"trait_type": "Relic", "value": "True"}, ') : new bytes(0);
-        bytes memory entriesLine = token.craftToVaultStatus(_tokenId) ? abi.encodePacked        ('{"trait_type": "Entries", "value": "', LibString.toString(token.craftToEntry(_tokenId)), '"}, ') : new bytes(0);
         bytes memory machineLine;
-
-        //string memory ext = getMetadataExtention(_tokenId);
 
         if (token.craftToMachineStatus(_tokenId)) {
             address m = address(token.craftToMachine(_tokenId));
@@ -129,6 +132,11 @@ contract THE_VESSEL_renderer is Ownable {
                 } catch {}
             }
         }
+        
+        bytes memory colorLine = (token.craftToColorMode(_tokenId) != 0) ? abi.encodePacked     ('{"trait_type": "Color", "value": "', color, '"}, ') : new bytes(0);
+        bytes memory axiomLine = _isAxiom(_tokenId) ? abi.encodePacked                          ('{"trait_type": "Axiom", "value": "True"}, ') : new bytes(0);
+        bytes memory relicLine = relics.isRelic(_tokenId) ? abi.encodePacked                    ('{"trait_type": "Relic", "value": "True"}, {"trait_type": "Relic Kind", "value": "', relics.getTokenKind(_tokenId),'"}, ') : new bytes(0);
+        bytes memory entriesLine = token.craftToVaultStatus(_tokenId) ? abi.encodePacked        ('{"trait_type": "Entries", "value": "', LibString.toString(entryCount), '"}, ') : new bytes(0);
         
         bytes memory traits = abi.encodePacked(
             '{"trait_type": "Type", "value": "', typeStr, '"}, ',
@@ -152,10 +160,6 @@ contract THE_VESSEL_renderer is Ownable {
         return string(abi.encodePacked(traits, traits2, traits3));
     }
 
-    function getMetadataExtention(uint _tokenId) private view returns (string memory) {
-        return "";
-    }
-
     function craftToSVG(uint _tokenId) public view returns (string memory) {
         bytes memory imgSource = token.craftToPayload(_tokenId);
         if (imgSource.length == 0) imgSource = new bytes(_tokenId);
@@ -164,33 +168,27 @@ contract THE_VESSEL_renderer is Ownable {
     }
 
     function contractURI() external pure returns (string memory) {
-
-        string memory image = string(abi.encodePacked(
-                "data:application/json;base64,",
-                getContractSVG()
-            ));
-
-        string memory description = "Vessel description";
+        string memory image = string(
+            abi.encodePacked("data:image/svg+xml;base64,", getContractSVG())
+        );
 
         bytes memory json = abi.encodePacked(
             '{',
                 '"name":"The Vessel",',
-                '"description":"', description, '",',
+                '"description":"A conceptual experiment in unique fungibility, where data becomes the medium of value",',
                 '"image":"', image, '",',
-                '"external_link":"https://www.thevessel.fun",'
+                '"external_link":"https://www.thevessel.fun"',
             '}'
         );
 
-        return string(
-            abi.encodePacked(
-                "data:application/json;base64,",
-                Base64.encode(json)
-            )
-        );
+        return string(abi.encodePacked(
+            "data:application/json;base64,",
+            Base64.encode(json)
+        ));
     }
 
     function getEmptyImage() public view returns (string memory) {
-        string memory name = "test.jpg";
+        string memory name = "the_vessel_empty.jpg";
         string memory img = fileStore.getFile(name).read();
         return img;
     }
@@ -198,10 +196,11 @@ contract THE_VESSEL_renderer is Ownable {
     function getContractSVG() public pure returns (string memory) {
         return Base64.encode(
             abi.encodePacked(
-                '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" ',
-                'viewBox="0 0 400 400"><rect width="400" height="400" fill="#00000',
-                '0"/><polygon fill="#ffffff"points="198,68110,238155,325198,299"/>',
-                '<polygon fill="#ffffff"points="205,68293,238248,325205,299"/></svg>'
+                "<svg xmlns='http://www.w3.org/2000/svg' width='600' height='600' viewBox='0 0 400 400'>",
+                "<rect width='400' height='400' fill='#000000'/>",
+                "<polygon fill='#ffffff' points='198,68 110,238 155,325 198,299'/>",
+                "<polygon fill='#ffffff' points='205,68 293,238 248,325 205,299'/>",
+                "</svg>"
             )
         );
     }
@@ -425,5 +424,5 @@ contract THE_VESSEL_renderer is Ownable {
             z = (x / z + z) / 2;
         }
     }
-    
+
 }
