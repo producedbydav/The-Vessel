@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
 import "./base64.sol";
 import "./LibString.sol";
 import "@openzeppelin/contracts@5.0.2/access/Ownable.sol";
@@ -22,7 +24,10 @@ interface IVesselToken {
     function craftToMachineStatus(uint _tokenId) external view returns (bool);
     function craftToType(uint _tokenId) external view returns (string memory);
     function craftToChosenEntry(uint _tokenId) external view returns (uint);
+    function craftToDelegate(uint _tokenId) external view returns (address);
     function lockStart() external view returns (uint);
+    function ownerOf(uint _tokenId) external view returns (address);
+    function refreshMetadata(uint _tokenId) external;
     enum role {
         undefined,
         navigator,
@@ -31,29 +36,42 @@ interface IVesselToken {
     }
 }
 
-pragma solidity ^0.8.20;
-
 contract THE_VESSEL_relics is Ownable {
 
-    IVesselToken vessel;
+    IVesselToken public vessel;
 
-    struct token {
+    struct relic {
         string kind;
         bytes[] data;
+        uint entries;
         address machine;
     }
 
-    mapping (uint => token) public RELICS;
-    mapping(uint256 => uint256) public relicIdToIndex;
-    
+    mapping (uint => relic) public  RELICS;
+    mapping(uint => uint) public    relicIdToIndex;
+    mapping(uint => uint) public    relicToChosenEntry;
+
     uint[] public relicIds;
 
     error RelicAlreadyExists();
     error RelicDoesNotExist();
     error BytesTooLong();
+    error NotRelic();
+    error MustBeHolderOrDelegate();
+    error WrongType();
+    error OutOfRangeEntry();
+
+    event RelicEntrySet(uint tokenId, uint entry);
+
+    modifier onlyHolderOrDelegate(uint tokenId) {
+        address owner = vessel.ownerOf(tokenId);
+        address del = vessel.craftToDelegate(tokenId);
+        if (msg.sender != owner && msg.sender != del) revert MustBeHolderOrDelegate();
+        _;
+    }
     
     constructor()  Ownable(msg.sender) {
-        vessel =     IVesselToken    (0x353433fc2468B08CeF3eD1bEec4b43e25D49C311);
+        vessel =     IVesselToken    (0xECb92Cc7112b80A2234936315BbB493fb48d1463);
     }
 
     function addRelic(uint _tokenId, bytes[] memory _bytes, address _machine, string memory _kind) public onlyOwner {
@@ -66,6 +84,7 @@ contract THE_VESSEL_relics is Ownable {
 
         RELICS[_tokenId].kind = _kind;
         RELICS[_tokenId].machine = _machine;
+        RELICS[_tokenId].entries = _bytes.length;
 
         relicIdToIndex[_tokenId] = relicIds.length;
         relicIds.push(_tokenId);
@@ -97,35 +116,44 @@ contract THE_VESSEL_relics is Ownable {
     }
 
     function relicToPayload(uint _tokenId) external view returns (bytes memory payload) {
-        token memory t = RELICS[_tokenId];
+        relic storage t = RELICS[_tokenId];
+
         if (vessel.craftToMachineStatus(_tokenId)) {
-            payload = IMachine(t.machine).craftToPayload(_tokenId);
-        } else {
-            bytes[] storage arr = RELICS[_tokenId].data;
-
-            // For vaults: read selector; for others: read "current Entry" (latest)
-            uint it;
-            if (vessel.craftToVaultStatus(_tokenId)) {
-                it = vessel.craftToChosenEntry(_tokenId);
-                if (it == 0) it = vessel.craftToEntry(_tokenId); // default to latest
-            } else {
-                it = 1;
-            }
-
-            if (arr.length == 0) {
-                payload = "";
-            } else if (!vessel.craftToVaultStatus(_tokenId) && it == 0) {
-                // capsule, first write
-                payload = arr[0];
-            } else if (it >= 1 && it <= arr.length) {
-                // vault/capsule: Entry is 1-based, storage is 0-based
-                payload = arr[it - 1];
-            } else {
-                // out-of-range protection
-                payload = "";
-            }
+            return IMachine(t.machine).craftToPayload(_tokenId);
         }
 
+        bytes[] storage arr = t.data;
+        uint len = arr.length;
+        if (len == 0) return "";
+
+        // Capsule (non-vault, non-machine): always first entry
+        if (!vessel.craftToVaultStatus(_tokenId)) {
+            return arr[0];
+        }
+
+        // Vault: chosen entry is 1-based. If 0, default to latest (len).
+        uint entry = relicToChosenEntry[_tokenId];
+        if (entry == 0) entry = len;
+
+        // entry must be in [1..len]
+        if (entry > len) return "";
+
+        // convert 1-based entry -> 0-based index
+        return arr[entry - 1];
+    }
+
+    function vaultRelicToEntry(uint _tokenId, uint _entry) public view returns (bytes memory) {
+        if (!vessel.craftToVaultStatus(_tokenId)) {revert WrongType();}
+        if (!isRelic(_tokenId)) {revert NotRelic();}
+        return RELICS[_tokenId].data[_entry - 1];
+    }
+
+    function setVaultEntryHolder(uint _tokenId, uint _entry) public onlyHolderOrDelegate(_tokenId) {
+        if (!vessel.craftToVaultStatus(_tokenId)) revert WrongType();
+        if (_entry == 0 ||_entry > RELICS[_tokenId].data.length) revert OutOfRangeEntry();
+        relicToChosenEntry[_tokenId] = _entry;
+        vessel.refreshMetadata(_tokenId);
+        emit RelicEntrySet(_tokenId, _entry);
     }
 
     function setVesselContract(address _a) public onlyOwner {
@@ -136,6 +164,9 @@ contract THE_VESSEL_relics is Ownable {
         return RELICS[_tokenId].kind;
     }
 
+    function getTokenEntries(uint _tokenId) external view returns (uint) {
+        return RELICS[_tokenId].entries;
+    }
     function isRelic(uint _tokenId) public view returns (bool) {
         return _exists(_tokenId);
     }
