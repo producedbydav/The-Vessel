@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 interface IMachine {
     function craftToPayload(uint _tokenId) external view returns (bytes memory);
-    function name() external returns (string memory);
+    function name() external view returns (string memory);
 }
 
 contract Machine_rand is IMachine {
