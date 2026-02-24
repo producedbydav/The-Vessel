@@ -17,7 +17,7 @@ interface IRenderer {
 
 contract THE_VESSEL_sequences is ERC1155, Ownable, ReentrancyGuard {
 
-    IVesselToken vessel = IVesselToken(0x13D6cB14D6bf5ecCeC2B28eD27a228729F15DA0D);
+    IVesselToken public vessel = IVesselToken(0xECb92Cc7112b80A2234936315BbB493fb48d1463);
 
     struct token {
         string artist;
@@ -58,7 +58,7 @@ contract THE_VESSEL_sequences is ERC1155, Ownable, ReentrancyGuard {
     }
 
     constructor() 
-        ERC1155("SEQUENCES")
+        ERC1155("")
         Ownable(msg.sender)
     {
 
@@ -142,10 +142,19 @@ contract THE_VESSEL_sequences is ERC1155, Ownable, ReentrancyGuard {
         tokens[_tokenId].locked = true;
     }
 
+    function setVesselContract(address _a) public onlyOwner {
+        vessel = IVesselToken(_a);
+    }
+
     function withdraw() external onlyOwner{
         uint256 bal = address(this).balance;
         (bool ok, ) = payable(owner()).call{value: bal}("");
         require(ok, "ETH transfer failed");
     }
 
+    function readBlockEvents(uint _e) public view returns (uint) {
+        return vessel.blockEvents(_e);
+    }
+
 }
+
