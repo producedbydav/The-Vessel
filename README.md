@@ -1,6 +1,6 @@
 # The Vessel
 
-**The Vessel** is a user-controlled dynamic onchain NFT system built around dynamic, archived and programmable payloads (bytes renderered as monochrome pixels).
+**The Vessel** is a user-controlled onchain NFT system built around dynamic, archived and programmable payloads (bytes renderered as monochrome pixels).
 
 Rather than treating an NFT as a fixed media object, The Vessel treats each token as a living container of state, behavior, and interpretation. A craft can store or create its own payload, delegate control, and expose its resulting data to renderers and other contracts.
 
@@ -12,9 +12,9 @@ The Vessel is built around a simple but flexible premise:
 
 - a token can display stored or runtime data
 - that data can be changed, interpreted, or generated through different systems
-- renderers and downstream contracts can read that data and turn it into visual, sonic, or temporal outputs
+- renderers and downstream contracts can read that data and turn it into visual, sonic, or other outputs
 
-This makes the NFT less like a static collectible and more like a programmable instrument.
+This makes the NFT less like a static collectible and more like a programmable artwork.
 
 ---
 
@@ -28,20 +28,24 @@ It manages:
 - token ownership
 - token state
 - payload storage and retrieval
-- selection or routing of Machines
-- interaction rules for holders and delegates
-- the main read surface for renderers and connected systems
+- selection of Machines
+- delegation
 
 In practice, the token contract is the primary source of truth.
 
-### Machines
-Machines are modular contracts that generate, transform, interpret, or route payload data.
+### Types
 
-A Machine can:
+Capsules types can store data as bytes in size equal to their tokenId
+- Once it is rewritten, the old entry is lost
+
+Vault types can store multiple entries of data as bytes in size equal to their tokenId
+- Each write is stored as an addition immutable entry
+- Holder can control which entry is displayed
+
+Machine types read from Machine contracts in runtime, not state storage. A Machine contract can:
 - create net new data or patterns
-- process token state
-- process external onchain data
 - reinterpret an existing payload
+- process external onchain data
 - provide a live or dynamic output based on tokenId, block context, or other logic
 
 Machines let a craft become more than stored bytes. They allow behavior.
@@ -52,16 +56,7 @@ Relics are curated external entries that can be read by the token system.
 Unlike holder-controlled token state, Relics allow specific outputs or payload references to be maintained externally and intentionally. They act more like authored or curated anchors inside the broader system.
 
 ### Renderer
-The renderer reads from the token contract and turns resolved payload data into an output format.
-
-Depending on the piece, that output may be:
-- image
-- interactive media
-- HTML
-- audio
-- metadata for downstream interpretation
-
-The renderer is not the source of the work. It is the interpreter of the token’s current state.
+The renderer reads from the token contract and turns resolved payload data into monochrome pixels. The renderer is not the source of the work. It is the interpreter of the token’s current state.
 
 ### Sequences
 Sequences are on a secondary ERC-1155 layer tied to timing and state inside the main 721 system.
@@ -74,13 +69,7 @@ Rather than existing as a separate disconnected collection, Sequences reads from
 
 A simplified flow looks like this:
 
-`holder / delegate / system choice -> token state -> machine or relic resolution -> craftToPayload() -> renderer or downstream reader`
-
-Another way to think about it:
-
-- **the token contract** decides what a craft currently is
-- **Machines and Relics** shape what data is returned
-- **renderers and Sequences** decide how that data is experienced
+`holder / delegate / system choice -> token state or machine read call -> craftToPayload() -> renderer or downstream reader`
 
 ---
 
@@ -104,7 +93,7 @@ The emphasis is on dynamic art, programmable media and evolving onchain state ra
 Current core contracts:
 
 - `vessel_token.sol` — main ERC-721 token contract, storage, logic, and read surface
-- `vessel_machine_entropy.sol` — example / current Machine implementation
+- `vessel_machine_router.sol` — example / current Machine implementation
 - `vessel_relics.sol` — Relic storage and retrieval layer
 - `vessel_renderer.sol` — rendering contract that interprets token state
 - `vessel_sequences.sol` — secondary ERC-1155 system tied to Vessel data
