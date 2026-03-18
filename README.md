@@ -1,8 +1,8 @@
 # The Vessel
 
-**The Vessel** is a user-controlled dynamic onchain NFT system built around programmable payloads, modular Machines, curated Relics, and secondary outputs like Sequences.
+**The Vessel** is a user-controlled dynamic onchain NFT system built around dynamic, archived and programmable payloads (bytes renderered as monochrome pixels).
 
-Rather than treating an NFT as a fixed media object, The Vessel treats each token as a living container of state, behavior, and interpretation. A craft can hold its own payload, delegate control, route through Machines, read from Relics, and expose its resulting data to renderers and other contracts.
+Rather than treating an NFT as a fixed media object, The Vessel treats each token as a living container of state, behavior, and interpretation. A craft can store or create its own payload, delegate control, and expose its resulting data to renderers and other contracts.
 
 ---
 
@@ -10,7 +10,7 @@ Rather than treating an NFT as a fixed media object, The Vessel treats each toke
 
 The Vessel is built around a simple but flexible premise:
 
-- a token can hold or point to data
+- a token can display stored or runtime data
 - that data can be changed, interpreted, or generated through different systems
 - renderers and downstream contracts can read that data and turn it into visual, sonic, or temporal outputs
 
@@ -120,9 +120,9 @@ As the system grows, this repo may expand to include more Machines, renderers, a
 A good order for understanding the contracts is:
 
 1. `vessel_token.sol`
-2. `vessel_relics.sol`
-3. `vessel_machine_entropy.sol`
-4. `vessel_renderer.sol`
+2. `vessel_renderer.sol`
+3. `vessel_machine_router.sol`
+4. `vessel_relics.sol`
 5. `vessel_sequences.sol`
 
 Start with the token contract first. It defines the primary structure the other parts plug into.
