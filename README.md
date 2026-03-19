@@ -129,13 +129,10 @@ The Vessel is guided by a few core ideas:
   Holders are not only viewers. In many cases they help determine what a craft becomes.
 
 - **modularity matters**  
-  Machines should be swappable, extensible, and capable of very different behaviors.
+  Machines are swappable, extensible, and capable of very different behaviors.
 
 - **onchain media can be programmable**  
-  Art and music onchain do not need to be static files. They can be systems.
-
-- **rendering is interpretation**  
-  A payload is not the final artwork by itself. It becomes artwork through a renderer or reader.
+  Art and music onchain do not need to be static files. They can be interconnectd systems.
 
 ---
 
