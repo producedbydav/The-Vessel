@@ -93,7 +93,7 @@ The emphasis is on dynamic art, programmable media and evolving onchain state ra
 Current core contracts:
 
 - `vessel_token.sol` — main ERC-721 token contract, storage, logic, and read surface
-- `vessel_machine_router.sol` — example / current Machine implementation
+- `vessel_machine_router.sol` — iterates through generalized Machine contracts - set as default Machine at claim
 - `vessel_relics.sol` — Relic storage and retrieval layer
 - `vessel_renderer.sol` — rendering contract that interprets token state
 - `vessel_sequences.sol` — secondary ERC-1155 system tied to Vessel data
@@ -148,7 +148,7 @@ This repository contains the core architecture for:
 - machine routing / generation logic
 - relic-based external entries
 - rendering
-- sequence-based secondary outputs
+- sequence-based secondary pieces
 
 Some parts are canonical core infrastructure, while other parts may remain experimental as the system develops.
 
